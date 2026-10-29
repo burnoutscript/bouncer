@@ -190,8 +190,13 @@ function readLocal({ path }) {
   const pkg = files.find(f => f.path === 'package.json');
   if (pkg) {
     try { name = JSON.parse(pkg.data.toString()).name || name; ecosystem = 'npm'; } catch { /* not json */ }
-  } else if (files.some(f => f.path === 'setup.py' || f.path === 'pyproject.toml')) {
+  } else if (files.some(f => /^(setup\.py|pyproject\.toml|setup\.cfg|PKG-INFO)$/.test(f.path) || /\.dist-info\/METADATA$|(^|\/)__init__\.py$/.test(f.path))) {
     ecosystem = 'pypi';
+    // Use the declared project name, so look-alike checks see "reqeusts", not a folder name.
+    const meta = files.find(f => /(^|\/)(PKG-INFO|METADATA)$/.test(f.path));
+    const setup = files.find(f => f.path === 'setup.py');
+    const declared = meta?.data.toString('utf8').match(/^Name:\s*(\S+)/m)?.[1] ?? setup?.data.toString('utf8').match(/\bname\s*=\s*["']([\w.-]+)["']/)?.[1];
+    if (declared) name = declared.toLowerCase().replace(/[._]+/g, '-');
   }
   return { ecosystem, name, version: null, local: true, files, skipped, meta: {} };
 }

@@ -182,7 +182,8 @@ function metaFindings(pkg, hasInstallScript) {
   if (pkg.ecosystem === 'npm' || pkg.ecosystem === 'pypi') {
     const twin = lookalike(pkg.name, pkg.ecosystem);
     if (twin) {
-      const young = created < 24 * 180 || (m.versionCount ?? 99) < 5;
+      // Without registry history (local scans) we can't tell, so treat it as young.
+      const young = pkg.local || created < 24 * 180 || (m.versionCount ?? 99) < 5;
       out.push({ id: 'typosquat', severity: young ? 'high' : 'low', title: `Name looks like "${twin}"`, why: young ? 'A young package with a look-alike name is the textbook typosquat.' : `Probably legitimate, but make sure you meant "${twin}".`, file: null, line: null, snippet: null });
     }
   }
@@ -204,7 +205,7 @@ const ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 
 export function analyze(pkg) {
   const isNpm = pkg.ecosystem === 'npm' || pkg.files.some(f => f.path === 'package.json');
-  const isPy = pkg.ecosystem === 'pypi' || pkg.files.some(f => f.path === 'setup.py' || f.path.endsWith('.pth'));
+  const isPy = pkg.ecosystem === 'pypi' || pkg.files.some(f => f.path === 'setup.py' || f.path.endsWith('.pth') || /(^|\/)(PKG-INFO|METADATA)$/.test(f.path));
   const roles = new Map();
   const findings = [];
   const virtual = [];

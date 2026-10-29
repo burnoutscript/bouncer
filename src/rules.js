@@ -42,7 +42,7 @@ const EXFIL = [
   // Host labels are anchored with a lookbehind so a long alphanumeric run is O(n), not O(n^2).
   ['request-capture service', /\b(webhook\.site|requestbin\.(com|net|io)|hookbin\.com|requestcatcher\.com)\b|(?<![a-z0-9-])[a-z0-9-]{1,63}\.(m\.pipedream\.net|free\.beeceptor\.com)\b/i],
   ['tunnel', /(?<![a-z0-9-])[a-z0-9-]{1,63}\.(ngrok(-free)?\.(io|app|dev)|trycloudflare\.com|loca\.lt|serveo\.net)/i],
-  ['OAST callback', /(?<![a-z0-9-])[a-z0-9]{6,63}\.(oast\.(pro|live|site|online|fun|me)|interact\.sh|burpcollaborator\.net)\b|canarytokens\.com\//i],
+  ['OAST callback', /(?<![a-z0-9-])[a-z0-9]{6,63}\.(oast\.(pro|live|site|online|fun|me)|interact\.sh|burpcollaborator\.net)\b|canarytokens\.com\/|https?:\/\/[a-z0-9.-]{0,80}\boast(-[a-z]{2,4})?\.[a-z0-9-]{2,63}\.[a-z]{2,}/i],
   ['paste or file drop', /pastebin\.com\/raw|transfer\.sh|file\.io\/|0x0\.st|bashupload\.com|temp\.sh/i],
   ['raw IP address', /https?:\/\/(?!(?:127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.))(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\//],
 ];
@@ -56,8 +56,11 @@ const ENV_ITER = /Object\.(entries|keys|values)\(\s*process\.env\s*\)|dict\(\s*o
 // Who and where the victim is: the payload of dependency-confusion "beacons".
 const IDENTITY = /\bos\.(hostname|userInfo|networkInterfaces)\(\)|\bsocket\.gethostname\(\)|\bplatform\.(node|uname)\(\)|\bgetpass\.getuser\(\)|\bos\.getlogin\(\)|\bos\.uname\(\)|\$\((whoami|hostname|id|pwd)\)|`(whoami|hostname)`|api\.ipify\.org|ifconfig\.me|ipinfo\.io\/|icanhazip\.com/;
 const DNS_EXFIL = /(^|[;&|(`'"]\s*)(nslookup|dig)\s[^\n]{0,80}(\$\((whoami|hostname|id|pwd|uname)|`(whoami|hostname)`|\$\{?(USER|HOSTNAME|LOGNAME)\b)|\bdns\.(lookup|resolve\w*)\(\s*`[^`]{0,200}\$\{[^}]{0,60}(hostname|userInfo|username|whoami)/m;
-const REVERSE_SHELL = /\/dev\/tcp\/\S+\/\d+|\bnc(at)?\s+(-\w+\s+)*-(e|c)\s+\/bin\/|\bpty\.spawn\(\s*["']\/bin\/(ba)?sh|\bos\.dup2\(\s*(s|sock|so|conn|client)\.fileno\(\)\s*,\s*[0-2]\s*\)|\bsocket\.socket\([^)]{0,80}\)[\s\S]{0,600}\b(subprocess\.\w+|os\.system|os\.popen)\([\s\S]{0,300}\brecv\(|\.recv\(\d+\)[\s\S]{0,300}\b(subprocess\.\w+|os\.system|os\.popen)\(|\bnet\.(connect|createConnection)\([\s\S]{0,400}\bspawn\(\s*["'](\/bin\/)?(ba)?sh/;
+const REVERSE_SHELL = /\/dev\/tcp\/\S+\/\d+|\bsocket\b[\s\S]{0,800}\[\s*["']\/bin\/(ba)?sh["']\s*,\s*["']-i["']|\bnc(at)?\s+(-\w+\s+)*-(e|c)\s+\/bin\/|\bpty\.spawn\(\s*["']\/bin\/(ba)?sh|\bos\.dup2\(\s*(s|sock|so|conn|client)\.fileno\(\)\s*,\s*[0-2]\s*\)|\bsocket\.socket\([^)]{0,80}\)[\s\S]{0,600}\b(subprocess\.\w+|os\.system|os\.popen)\([\s\S]{0,300}\brecv\(|\.recv\(\d+\)[\s\S]{0,300}\b(subprocess\.\w+|os\.system|os\.popen)\(|\bnet\.(connect|createConnection)\([\s\S]{0,400}\bspawn\(\s*["'](\/bin\/)?(ba)?sh/;
 const ESCAPE = /\\x[0-9a-fA-F]{2}|\\[0-7]{3}/g;
+const UPLOAD = /\b(curl|wget)\b[^\n]{0,300}?(--data-binary\s+["']?@|--data(-raw|-urlencode)?\s+["']?@|\s-d\s+["']?@|\s-F\s+["']?[\w-]+=@|--upload-file\s|\s-T\s+\S|--post-file[=\s])/;
+const DECODE = /\b(b64decode|base64\.decodebytes|atob)\(|Buffer\.from\([^)]{0,200}["']base64["']\)|codecs\.decode\([^)]{0,200}["'](rot13|hex)["']/g;
+const AGENT_DOC = /(^|\/)(SKILL|CLAUDE|AGENTS|GEMINI)\.md$|\.cursorrules$|\.mdc$/i;
 const TOKEN_VARS =/\b(NPM_TOKEN|NODE_AUTH_TOKEN|GITHUB_TOKEN|GH_TOKEN|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY|PYPI_TOKEN|TWINE_PASSWORD|SLACK_TOKEN|STRIPE_SECRET_KEY|DATABASE_URL)\b/;
 
 const REMOTE_EXEC = [
@@ -140,19 +143,28 @@ const bump = (sev, f) => (hot(f) ? { low: 'medium', medium: 'high', high: 'criti
 
 export const FILE_RULES = [
   function remoteExec(f) {
-    if (!CODE.has(f.kind) && f.role !== 'install') return [];
+    // Skills and agent rules are instructions the agent carries out, so a
+    // command written anywhere in them counts like a shell script.
+    const agentDoc = AGENT_DOC.test(f.path);
+    if (!CODE.has(f.kind) && f.role !== 'install' && !agentDoc) return [];
     // In shell files the pattern is the command. In JS/Python it is only a
     // command if something nearby executes it; otherwise it's help text, a
     // comment or a regex (like this file).
-    const isShell = f.kind === 'sh' || f.kind === 'ps1' || f.kind === 'bat';
+    const isShell = f.kind === 'sh' || f.kind === 'ps1' || f.kind === 'bat' || agentDoc;
+    const out = [];
+    const upload = first(f.text, UPLOAD);
+    if (upload && (isShell || EXEC.test(f.text.slice(Math.max(0, upload.index - 300), upload.index + 300)))) {
+      out.push(mk(f, 'file-upload', hot(f) || agentDoc ? 'high' : 'medium', 'Uploads local files to a server', 'Sending files off the machine is how skills and scripts exfiltrate your code and secrets.', upload));
+    }
     for (const re of REMOTE_EXEC) {
       for (const m of f.text.matchAll(new RegExp(re.source, `${re.flags.replace('g', '')}g`))) {
         const around = f.text.slice(Math.max(0, m.index - 300), m.index + m[0].length + 20);
         if (!isShell && !/\bexec\(|\beval\(|new Function/.test(m[0]) && !EXEC.test(around) && !/\b(system|popen|shell_exec|passthru)\(/.test(around)) continue;
-        return [mk(f, 'remote-code', hot(f) ? 'critical' : 'high', 'Downloads and runs remote code', 'Code fetched at run time can be swapped for malware at any moment, after any review.', { index: m.index, match: m[0] })];
+        out.push(mk(f, 'remote-code', hot(f) || agentDoc ? 'critical' : 'high', 'Downloads and runs remote code', 'Code fetched at run time can be swapped for malware at any moment, after any review.', { index: m.index, match: m[0] }));
+        return out;
       }
     }
-    return [];
+    return out;
   },
 
   function obfuscation(f) {
@@ -161,6 +173,18 @@ export const FILE_RULES = [
     for (const [label, re] of OBFUSCATION) {
       const hit = first(f.text, re);
       if (hit) out.push(mk(f, 'obfuscated-exec', bump('high', f), `Obfuscated code execution (${label})`, 'Legitimate packages almost never decode and execute hidden code.', hit));
+    }
+    // Decode on one line, execute on the next: `p = b64decode(x)` ... `exec(p)`.
+    if (!out.length) {
+      for (const d of f.text.matchAll(DECODE)) {
+        const after = f.text.slice(d.index, d.index + 600);
+        // (?<![.\w]) keeps out regex.exec(str) and friends.
+        const run = /(?<![.\w$])(exec|eval)\(\s*[A-Za-z_]\w*\s*(\)|,\s*(globals\(\)|\{))|new Function\(\s*[A-Za-z_]\w*\s*\)/.exec(after);
+        if (run) {
+          out.push(mk(f, 'obfuscated-exec', bump('high', f), 'Decodes data and then executes it', 'Hiding a payload in base64 and running it is the most common malware trick.', { index: d.index + run.index, match: run[0] }));
+          break;
+        }
+      }
     }
     const hexVars = f.text.match(/_0x[a-f0-9]{4,6}/g);
     if (hexVars && hexVars.length > 40 && !/\.min\.(js|mjs|cjs)$/.test(f.path)) {
