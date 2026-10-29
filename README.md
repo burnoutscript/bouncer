@@ -6,6 +6,8 @@ Your AI agent installs code written by strangers all day. bouncer checks each pa
 ![zero dependencies](https://img.shields.io/badge/dependencies-0-2ea043)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
+![bouncer blocking a malicious install in Claude Code, then catching the package sending a fake npm token in the sandbox](docs/demo.gif)
+
 Claude Code, Cursor and Codex run `npm install`, `pip install`, `npx` and `curl | sh` on your machine, and nobody reads what those commands pull in. bouncer sits in front of them. It scans each package before it runs, and it can also run the package in a sandbox full of fake credentials to see what it does.
 
 ```
