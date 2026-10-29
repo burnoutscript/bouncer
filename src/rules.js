@@ -48,12 +48,17 @@ const EXFIL = [
 ];
 
 const NETWORK = /\b(fetch\(|https?\.(request|get)\(|require\(['"](https?|net|dgram|dns|axios|node-fetch|got|undici)['"]\)|from ['"](axios|node-fetch|got|undici)['"]|XMLHttpRequest|WebSocket\(|net\.connect|dgram\.createSocket|dns\.(resolve|lookup)|requests\.(get|post|put)|urllib\.request|urlopen\(|http\.client|socket\.socket|aiohttp|httpx\.|Invoke-WebRequest|Invoke-RestMethod|iwr |curl |wget |nc -)/;
-const EXEC = /(\bchild_process\b|\bexecSync\(|\bspawnSync\(|\bexecFile(Sync)?\(|\bsubprocess\.(run|call|Popen|check_output|check_call)\(|\bos\.(system|popen)\(|\bRuntime\.getRuntime|\bpowershell(\.exe)?\s+-|\bcmd(\.exe)?\s+\/c)/;
+const EXEC = /(\bchild_process\b|\bos\.startfile\(|\bexecSync\(|\bspawnSync\(|\bexecFile(Sync)?\(|\bsubprocess\.(run|call|Popen|check_output|check_call)\(|\bos\.(system|popen)\(|\bRuntime\.getRuntime|\bpowershell(\.exe)?\s+-|\bcmd(\.exe)?\s+\/c)/;
 // Serialising the whole environment is the strong signal. Iterating it is
 // normal (copying env into a child process), except in install code.
 const ENV_HARVEST = /JSON\.stringify\(\s*process\.env\s*\)|json\.dumps\(\s*(dict\()?os\.environ|str\(\s*os\.environ\s*\)|\benv\s*\|\s*(curl|nc|base64)|printenv\s*\|\s*(curl|nc|base64)|Get-ChildItem\s+env:[^\n]{0,200}\|\s*(ConvertTo-Json|Out-String)/i;
 const ENV_ITER = /Object\.(entries|keys|values)\(\s*process\.env\s*\)|dict\(\s*os\.environ\s*\)|os\.environ\.(copy|items)\(\)/;
-const TOKEN_VARS = /\b(NPM_TOKEN|NODE_AUTH_TOKEN|GITHUB_TOKEN|GH_TOKEN|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY|PYPI_TOKEN|TWINE_PASSWORD|SLACK_TOKEN|STRIPE_SECRET_KEY|DATABASE_URL)\b/;
+// Who and where the victim is: the payload of dependency-confusion "beacons".
+const IDENTITY = /\bos\.(hostname|userInfo|networkInterfaces)\(\)|\bsocket\.gethostname\(\)|\bplatform\.(node|uname)\(\)|\bgetpass\.getuser\(\)|\bos\.getlogin\(\)|\bos\.uname\(\)|\$\((whoami|hostname|id|pwd)\)|`(whoami|hostname)`|api\.ipify\.org|ifconfig\.me|ipinfo\.io\/|icanhazip\.com/;
+const DNS_EXFIL = /(^|[;&|(`'"]\s*)(nslookup|dig)\s[^\n]{0,80}(\$\((whoami|hostname|id|pwd|uname)|`(whoami|hostname)`|\$\{?(USER|HOSTNAME|LOGNAME)\b)|\bdns\.(lookup|resolve\w*)\(\s*`[^`]{0,200}\$\{[^}]{0,60}(hostname|userInfo|username|whoami)/m;
+const REVERSE_SHELL = /\/dev\/tcp\/\S+\/\d+|\bnc(at)?\s+(-\w+\s+)*-(e|c)\s+\/bin\/|\bpty\.spawn\(\s*["']\/bin\/(ba)?sh|\bos\.dup2\(\s*(s|sock|so|conn|client)\.fileno\(\)\s*,\s*[0-2]\s*\)|\bsocket\.socket\([^)]{0,80}\)[\s\S]{0,600}\b(subprocess\.\w+|os\.system|os\.popen)\([\s\S]{0,300}\brecv\(|\.recv\(\d+\)[\s\S]{0,300}\b(subprocess\.\w+|os\.system|os\.popen)\(|\bnet\.(connect|createConnection)\([\s\S]{0,400}\bspawn\(\s*["'](\/bin\/)?(ba)?sh/;
+const ESCAPE = /\\x[0-9a-fA-F]{2}|\\[0-7]{3}/g;
+const TOKEN_VARS =/\b(NPM_TOKEN|NODE_AUTH_TOKEN|GITHUB_TOKEN|GH_TOKEN|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY|PYPI_TOKEN|TWINE_PASSWORD|SLACK_TOKEN|STRIPE_SECRET_KEY|DATABASE_URL)\b/;
 
 const REMOTE_EXEC = [
   /\b(curl|wget)\b[^\n|;]{0,400}\|\s*(sudo\s+)?(ba|z|da)?sh\b/,
@@ -164,6 +169,25 @@ export const FILE_RULES = [
     }
     const blob = first(f.text, /['"`][A-Za-z0-9+/]{3000,}={0,2}['"`]/);
     if (blob && hot(f)) out.push(mk(f, 'encoded-blob', 'medium', 'Large encoded blob in install or entry code', 'Payloads are often hidden as long base64 strings.', blob));
+    return out;
+  },
+
+  function backdoor(f) {
+    if (!CODE.has(f.kind)) return [];
+    const hit = first(f.text, REVERSE_SHELL);
+    return hit ? [mk(f, 'reverse-shell', 'critical', 'Reverse shell or remote command backdoor', 'Gives someone else a shell on your machine.', hit)] : [];
+  },
+
+  function escapedCode(f) {
+    if (!CODE.has(f.kind) || /\.min\.[cm]?js$|_pb2\.py$/.test(f.path)) return [];
+    const out = [];
+    const evalEsc = first(f.text, /\b(eval|exec)\(\s*["'](\\x[0-9a-fA-F]{2}|\\[0-7]{3}){3}/);
+    if (evalEsc) out.push(mk(f, 'obfuscated-exec', bump('high', f), 'Executes code spelled out in escape sequences', 'Hiding function names like eval as \\x65\\x76\\x61\\x6c is what obfuscators such as BlankOBF do.', evalEsc));
+    const n = (f.text.match(ESCAPE) || []).length;
+    if (n > 300 && (n * 4) / f.text.length > 0.15) {
+      const hit = first(f.text, /\\x[0-9a-fA-F]{2}|\\[0-7]{3}/);
+      out.push(mk(f, 'obfuscator', bump('medium', f), 'Mostly escape-encoded code', `${n} \\x/octal escapes make up most of this file. Real code is written in plain text.`, hit));
+    }
     return out;
   },
 
@@ -307,10 +331,20 @@ export function chainRules(f, findings) {
   if (best && (ids.has('secret-access') || ids.has('env-harvest') || hot(f))) {
     out.push({ ...mk(f, 'exfil-chain', hot(f) ? 'critical' : 'high', 'Reads secrets and sends data over the network, side by side', 'The signature of a credential stealer.', { index: best.at, match: '' }) });
   }
+  // Beacons: identity (user, host, IP) gathered right next to a network call or DNS lookup.
+  const idAt = indexes(f.text, IDENTITY);
+  let beacon = null;
+  for (const s of idAt) for (const n of netAt) if (Math.abs(s - n) < NEAR && !beacon) beacon = Math.min(s, n);
+  if (beacon !== null) {
+    out.push(mk(f, 'recon-beacon', f.role === 'install' ? 'critical' : hot(f) ? 'high' : 'low', 'Sends your username, hostname or IP somewhere', 'The payload of dependency-confusion and reconnaissance packages.', { index: beacon, match: '' }));
+  }
+  const dnsHit = first(f.text, DNS_EXFIL);
+  if (dnsHit) out.push(mk(f, 'dns-exfil', hot(f) ? 'critical' : 'high', 'Leaks data through DNS lookups', 'Encoding user or host names into a DNS query sneaks data past firewalls.', dnsHit));
   const net = netAt.length > 0;
   if (hot(f) && EXEC.test(f.text) && net && !ids.has('remote-code')) {
     const hit = first(f.text, EXEC);
-    out.push(mk(f, 'install-exec-net', 'medium', 'Install or entry code spawns processes and uses the network', 'Often legitimate (downloading a binary), but the most common shape of droppers too.', hit));
+    // npm postinstalls download binaries all the time; setup.py almost never needs to.
+    out.push(mk(f, 'install-exec-net', /(^|\/)setup\.py$/.test(f.path) || /\bos\.startfile\(/.test(f.text) ? 'high' : 'medium', 'Install or entry code spawns processes and uses the network', 'Often legitimate (downloading a binary), but the most common shape of droppers too.', hit));
   }
   return out;
 }

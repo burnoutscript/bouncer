@@ -85,6 +85,8 @@ function pypiRoles(files) {
   for (const f of files) {
     if (f.path === 'setup.py') roles.set(f.path, 'install');
     else if (/^(src\/)?[^/]+\/__init__\.py$/.test(f.path) && !AUX.test(f.path)) roles.set(f.path, 'entry');
+    // Top-level modules (py_modules) are importable too.
+    else if (/^[^/]+\.py$/.test(f.path) && !/^(conftest|noxfile|tasks|fabfile|manage)\.py$/.test(f.path)) roles.set(f.path, 'entry');
     else if (f.path.endsWith('.pth') && !AUX.test(f.path)) {
       const text = f.data.toString('utf8');
       if (/^\s*import\s/m.test(text)) {
@@ -94,6 +96,71 @@ function pypiRoles(files) {
     }
   }
   return { roles, virtual: [], findings };
+}
+
+// Libraries whose main use is stealing: cookie grabbers, Discord exfil helpers, keyloggers.
+const STEALER_DEPS = {
+  'browser-cookie3': 'high', browser_cookie3: 'high', dhooks: 'high', discordwebhook: 'high', 'discord-webhook': 'medium',
+  robloxpy: 'medium', pynput: 'low', pyarmor: 'medium', 'discord-webhook-node': 'medium', 'node-hide-console-window': 'high',
+  'child_process': 'low',
+};
+
+// Skills: the agent runs their scripts and follows their code blocks, so all of it is hot.
+const FENCE_KIND = { bash: 'sh', sh: 'sh', shell: 'sh', zsh: 'sh', console: 'sh', js: 'js', javascript: 'js', node: 'js', ts: 'js', typescript: 'js', python: 'py', py: 'py', powershell: 'ps1', ps1: 'ps1', pwsh: 'ps1', cmd: 'bat', bat: 'bat' };
+const AGENT_DOC = /(^|\/)(SKILL|CLAUDE|AGENTS|GEMINI)\.md$|\.cursorrules$|\.mdc$/i;
+
+function skillRoles(files) {
+  const roles = new Map();
+  const virtual = [];
+  const skillDirs = files.filter(f => /(^|\/)SKILL\.md$/i.test(f.path)).map(f => f.path.replace(/SKILL\.md$/i, ''));
+  if (skillDirs.length) {
+    for (const f of files) {
+      if (skillDirs.some(d => f.path.startsWith(d)) && /\.(py|[cm]?js|ts|sh|bash|ps1|bat|rb)$/.test(f.path)) roles.set(f.path, 'entry');
+    }
+  }
+  for (const f of files.filter(x => AGENT_DOC.test(x.path))) {
+    const text = f.data.toString('utf8');
+    let i = 0;
+    for (const m of text.matchAll(/^```[ \t]*([\w-]*)[^\n]*\n([\s\S]{1,20000}?)^```/gm)) {
+      const kind = FENCE_KIND[m[1].toLowerCase()];
+      if (kind) virtual.push({ path: `${f.path}#code-block-${++i}`, data: Buffer.from(m[2]), kind, role: 'entry' });
+    }
+  }
+  return { roles, virtual };
+}
+
+function manifestFindings(files, pkg) {
+  const out = [];
+  const deps = new Set();
+  const pj = files.find(f => f.path === 'package.json');
+  if (pj) {
+    try {
+      const j = JSON.parse(pj.data.toString('utf8'));
+      for (const k of Object.keys({ ...j.dependencies, ...j.optionalDependencies })) deps.add(k.toLowerCase());
+    } catch { /* not json */ }
+  }
+  for (const f of files.filter(x => /(^|\/)(setup\.py|pyproject\.toml|requires\.txt|requirements[\w.-]*\.txt|PKG-INFO|METADATA)$/.test(x.path) && x.data.length < 500000)) {
+    const text = f.data.toString('utf8');
+    for (const m of text.matchAll(/["'\n]\s*(?:Requires-Dist:\s*)?([A-Za-z][\w.-]{1,60})\s*(?:[<>=!~;[\]"'\n,])/g)) deps.add(m[1].toLowerCase());
+  }
+  for (const d of deps) {
+    const sev = STEALER_DEPS[d] ?? STEALER_DEPS[d.replace(/-/g, '_')];
+    if (sev) out.push({ id: 'stealer-dependency', severity: sev, title: `Depends on ${d}`, why: sev === 'low' ? 'Has honest uses, but shows up a lot in stealers.' : 'A library used almost only for stealing cookies, tokens or keystrokes.', file: pj ? 'package.json' : null, line: null, snippet: null });
+  }
+
+  // Dependency confusion: attackers publish an internal package name with a huge
+  // version (99.0.0, 999.9.9) so it beats the company's private registry.
+  let version = pkg.version;
+  if (!version && pj) { try { version = JSON.parse(pj.data.toString('utf8')).version; } catch { /* ignore */ } }
+  if (!version) {
+    const meta = files.find(f => /(^|\/)PKG-INFO$/.test(f.path));
+    version = meta?.data.toString('utf8').match(/^Version:\s*(\S+)/m)?.[1];
+  }
+  const major = Number(String(version ?? '').split('.')[0]);
+  if (major >= 90 && major < 2000) {
+    out.push({ id: 'confusion-version', severity: 'medium', title: `Version ${version} looks like a dependency-confusion squat`, why: 'Absurd version numbers exist to outrank a private package with the same name.', file: null, line: null, snippet: null });
+  }
+  return out;
 }
 
 function metaFindings(pkg, hasInstallScript) {
@@ -141,11 +208,12 @@ export function analyze(pkg) {
   const roles = new Map();
   const findings = [];
   const virtual = [];
-  for (const r of [isNpm && npmRoles(pkg.files), isPy && pypiRoles(pkg.files)].filter(Boolean)) {
+  for (const r of [isNpm && npmRoles(pkg.files), isPy && pypiRoles(pkg.files), skillRoles(pkg.files)].filter(Boolean)) {
     r.roles.forEach((v, k) => { if (roles.get(k) !== 'install') roles.set(k, v); });
     virtual.push(...r.virtual);
-    findings.push(...r.findings);
+    findings.push(...(r.findings ?? []));
   }
+  findings.push(...manifestFindings(pkg.files, pkg));
 
   // An MCP server depends on an MCP SDK; mentioning one in a string doesn't count.
   const MCP_SIGNS = /"@modelcontextprotocol\/sdk"\s*:|"fastmcp"\s*:|^[ \t]*(from mcp(\.server)?(\.fastmcp)? import|import mcp\b)|from fastmcp\s+import|new McpServer\(|FastMCP\(/m;
@@ -177,6 +245,11 @@ export function analyze(pkg) {
     for (const x of chainRules(f, findings)) findings.push(f.role === 'aux' ? { ...x, severity: DOWN[x.severity] } : x);
   }
   findings.push(...binaryRule(prepared));
+  // A squatted version number plus code that phones home is the whole attack, not two hints.
+  const phonesHome = findings.find(f => (f.id === 'recon-beacon' || f.id === 'install-exec-net' || f.id === 'dns-exfil') && f.severity !== 'low');
+  if (phonesHome && findings.some(f => f.id === 'confusion-version')) {
+    findings.push({ id: 'confusion-attack', severity: 'critical', title: 'Dependency-confusion attack: squatted version that phones home', why: 'A huge version number to hijack an internal package name, plus code that reports back who installed it.', file: phonesHome.file, line: phonesHome.line, snippet: phonesHome.snippet });
+  }
   findings.push(...metaFindings(pkg, findings.some(f => f.id === 'install-script' && f.severity !== 'low')));
 
   // One finding per rule per file; keep the worst.
