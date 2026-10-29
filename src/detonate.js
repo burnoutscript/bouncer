@@ -108,6 +108,12 @@ export function interpret({ traces, net, canary, phases, claudeAfter }) {
   }
   const rawIp = ev.connects.filter(c => c.addr !== '127.0.0.1' && c.addr !== '::1');
   if (rawIp.length) add('network-ip', 'high', `Connected straight to IP ${rawIp[0].addr}:${rawIp[0].port}`, 'Skipping DNS and dialing an IP is typical of malware C2.');
+  // curl ... | sh shows up as a downloader plus a shell reading stdin.
+  const downloader = ev.execs.find(e => /\/(curl|wget)$/.test(e.bin));
+  const stdinShell = ev.execs.find(e => /\/(ba|da|z)?sh$/.test(e.bin) && (e.argv.length === 1 || (e.argv.length === 2 && e.argv[1] === '-s')));
+  if (downloader && stdinShell) {
+    add('remote-exec', 'critical', 'Piped a download straight into a shell', 'Whatever the server sends next time is what runs.', downloader.argv.join(' ').slice(0, 160));
+  }
   const loud = [...new Set(ev.execs.filter(e => LOUD_BINARIES.test(e.bin) || /\b(curl|wget)\b.*\|\s*(ba)?sh/.test(e.argv.join(' '))).map(e => e.argv.join(' ').slice(0, 120)))];
   if (loud.length) add('exec', 'medium', `Ran ${loud.length} suspicious command${loud.length > 1 ? 's' : ''}`, 'Process launches during install or import.', loud.slice(0, 3).join(' ; '));
 

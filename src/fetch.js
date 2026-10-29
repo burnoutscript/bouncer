@@ -5,16 +5,23 @@ import { readArchive, stripRoot, LIMITS } from './archive.js';
 // Read at call time so tests and private mirrors can point elsewhere.
 const npmBase = () => process.env.BOUNCER_NPM_REGISTRY || 'https://registry.npmjs.org';
 const pypiBase = () => process.env.BOUNCER_PYPI || 'https://pypi.org';
-const TIMEOUT = Number(process.env.BOUNCER_TIMEOUT_MS || 20000);
+const TIMEOUT = Number(process.env.BOUNCER_TIMEOUT_MS || 60000);
 const SKIP_DIRS = new Set(['node_modules', '.git', '.venv', 'venv', '__pycache__', '.next', 'dist-types']);
 
 export class NotFoundError extends Error {}
 
-async function get(url, as = 'json') {
-  const res = await fetch(url, {
-    signal: AbortSignal.timeout(TIMEOUT),
-    headers: { 'user-agent': 'agent-bouncer (+https://github.com/burnoutscript/bouncer)' },
-  });
+async function get(url, as = 'json', attempt = 1) {
+  let res;
+  try {
+    res = await fetch(url, {
+      signal: AbortSignal.timeout(TIMEOUT),
+      headers: { 'user-agent': 'agent-bouncer (+https://github.com/burnoutscript/bouncer)' },
+    });
+  } catch (e) {
+    if (attempt < 2) return get(url, as, attempt + 1);
+    throw e;
+  }
+  if (res.status >= 500 && attempt < 2) return get(url, as, attempt + 1);
   if (res.status === 404) throw new NotFoundError(url);
   if (!res.ok) throw new Error(`GET ${url} -> HTTP ${res.status}`);
   if (as === 'json') return res.json();

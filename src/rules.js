@@ -19,7 +19,7 @@ const SECRET_PATHS = [
   ['GitHub CLI token', /gh[\\/]+hosts\.yml/],
   ['cloud CLI credentials', /\.config[\\/]+gcloud|\.azure[\\/]+(accessTokens|msal_token)/],
   ['browser passwords and cookies', /Login Data|Local State['"`]|[\\/]Cookies['"`]|cookies\.sqlite|logins\.json/],
-  ['crypto wallets', /wallet\.dat|Exodus[\\/]|MetaMask|nkbihfbeogaeaoehlefnkodbefgpgknn|Phantom[\\/]|keystore[\\/]UTC--|solana[\\/]+id\.json|\.electrum/i],
+  ['crypto wallets', /wallet\.dat\b|Exodus[\\/]+exodus\.wallet|Local Extension Settings[\\/]+[a-p]{32}|nkbihfbeogaeaoehlefnkodbefgpgknn|bfnaelmomeimhlpmgjnjophhpkkoljpa|keystore[\\/]UTC--|solana[\\/]+id\.json|\.electrum[\\/]+wallets/],
   ['Discord tokens', /discord(canary|ptb)?[\\/]+Local Storage|discord[\\/]+leveldb/i],
   ['macOS keychain', /login\.keychain|security find-generic-password/],
   ['system password file', /\/etc\/(shadow|passwd)\b/],
@@ -41,7 +41,7 @@ const EXFIL = [
   ['Telegram bot API', /api\.telegram\.org\/bot/i],
   ['request-capture service', /\b(webhook\.site|[a-z0-9]+\.m\.pipedream\.net|requestbin\.(com|net|io)|hookbin\.com|[a-z0-9-]+\.free\.beeceptor\.com|requestcatcher\.com)\b/i],
   ['tunnel', /[a-z0-9-]+\.(ngrok(-free)?\.(io|app|dev)|trycloudflare\.com|loca\.lt|serveo\.net)/i],
-  ['OAST callback', /interact\.sh|oast\.(pro|live|site|online|fun|me)|burpcollaborator\.net|canarytokens\.com/i],
+  ['OAST callback', /\b[a-z0-9]{6,}\.(oast\.(pro|live|site|online|fun|me)|interact\.sh|burpcollaborator\.net)\b|canarytokens\.com\//i],
   ['paste or file drop', /pastebin\.com\/raw|transfer\.sh|file\.io\/|0x0\.st|bashupload\.com|temp\.sh/i],
   ['raw IP address', /https?:\/\/(?!(?:127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.))(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\//],
 ];
@@ -171,7 +171,8 @@ export const FILE_RULES = [
     const out = [];
     for (const [label, re] of EXFIL) {
       const hit = first(f.text, re);
-      if (hit) out.push(mk(f, 'exfil-endpoint', bump(label === 'raw IP address' ? 'medium' : 'high', f), `Talks to a ${label}`, 'These endpoints are favourite drop points for stolen data.', hit));
+      // Honest libraries talk to Telegram and Discord too; only install/import code doing it is alarming.
+      if (hit) out.push(mk(f, 'exfil-endpoint', hot(f) ? 'critical' : 'medium', `Talks to a ${label}`, 'These endpoints are favourite drop points for stolen data.', hit));
     }
     return out;
   },
@@ -183,7 +184,7 @@ export const FILE_RULES = [
       const hit = first(f.text, re);
       if (hit) out.push(mk(f, 'secret-access', hot(f) ? 'high' : 'low', `Reads ${label}`, hot(f) ? 'Install and import code has no business touching your credentials.' : 'Fine for tools that manage these files, suspicious anywhere else.', hit));
     }
-    const env = first(f.text, ENV_HARVEST) ?? (f.role === 'install' ? first(f.text, ENV_ITER) : null);
+    const env = first(f.text, ENV_HARVEST);
     if (env) out.push(mk(f, 'env-harvest', bump('medium', f), 'Collects all environment variables', 'Dumping the whole environment grabs every token and API key in it.', env));
     return out;
   },
@@ -194,7 +195,7 @@ export const FILE_RULES = [
     for (const [label, re] of PERSISTENCE) {
       const hit = first(f.text, re);
       if (hit && /(write|append|open\(|>>|copy|cp |echo |mkdir|install)/i.test(snippet(f.text, hit.index, 200))) {
-        out.push(mk(f, 'persistence', bump('medium', f), `Modifies ${label}`, 'A way to keep running after the package is gone.', hit));
+        out.push(mk(f, 'persistence', hot(f) ? 'high' : 'low', `Modifies ${label}`, 'A way to keep running after the package is gone.', hit));
       }
     }
     // Plenty of honest CLIs register themselves with agents; doing it at install time is not honest.
@@ -210,7 +211,12 @@ export const FILE_RULES = [
     const tag = first(f.text.replace(FLAG_SEQ, m => ' '.repeat(m.length)), HIDDEN_TAGS);
     if (tag) out.push(mk(f, 'hidden-unicode', 'critical', 'Invisible Unicode tag characters', 'Invisible to humans, readable by models: the classic way to smuggle instructions into an agent.', tag));
     if (CODE.has(f.kind)) {
-      const bidi = first(f.text, BIDI);
+      // Unicode tables in minified bundles are full of these; Trojan Source hides in readable lines.
+      const bidi = [...f.text.matchAll(new RegExp(BIDI.source, 'g'))].map(m => ({ index: m.index, match: m[0] })).find(h => {
+        const start = f.text.lastIndexOf('\n', h.index) + 1;
+        const end = f.text.indexOf('\n', h.index);
+        return (end === -1 ? f.text.length : end) - start < 400;
+      });
       if (bidi) out.push(mk(f, 'bidi-control', 'high', 'Bidirectional control characters in code (Trojan Source)', 'Makes code display differently from how it runs.', bidi));
     }
     const zw = AGENT_TEXT.has(f.kind) ? first(f.text, ZERO_WIDTH) : null;
@@ -231,7 +237,7 @@ export const FILE_RULES = [
         const m = re.exec(r.text);
         if (!m) continue;
         const where = CODE.has(f.kind) ? 'MCP tool description' : 'text';
-        out.push(mk(f, 'prompt-injection', agentFile || CODE.has(f.kind) ? 'critical' : 'medium', `Prompt injection in ${where}: ${label}`, 'Text an agent will read that tries to change what the agent does.', { index: r.offset + m.index, match: m[0] }));
+        out.push(mk(f, 'prompt-injection', agentFile || CODE.has(f.kind) ? 'critical' : /(^|\/)README(\.md)?$/i.test(f.path) ? 'medium' : 'low', `Prompt injection in ${where}: ${label}`, 'Text an agent will read that tries to change what the agent does.', { index: r.offset + m.index, match: m[0] }));
         break;
       }
     }

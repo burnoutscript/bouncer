@@ -32,7 +32,7 @@ chown -R victim:victim $H
 export HOME=$H USER=victim
 export GITHUB_TOKEN="ghp_$CANARY" NPM_TOKEN="npm_$CANARY" AWS_ACCESS_KEY_ID="AKIA${CANARY:0:16}" \
   AWS_SECRET_ACCESS_KEY="$CANARY" ANTHROPIC_API_KEY="sk-ant-$CANARY" OPENAI_API_KEY="sk-$CANARY" \
-  CI=true npm_config_cache=/tmp/npm-cache
+  CI=true npm_config_cache=/tmp/npm-cache   SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt   CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt NODE_EXTRA_CA_CERTS=/etc/bouncer/ca.crt PIP_CERT=/etc/ssl/certs/ca-certificates.crt
 
 cp -r /pkg /work/pkg
 chown -R victim:victim /work

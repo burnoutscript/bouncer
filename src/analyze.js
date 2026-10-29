@@ -18,11 +18,15 @@ function kindOf(path, data) {
   const ext = path.includes('.') ? path.split('.').pop().toLowerCase() : '';
   if (/\.d\.[cm]?ts$/.test(path) || /\.map$/.test(path)) return 'other';
   if (KINDS[ext]) return KINDS[ext];
-  if (/(^|\/)(\.cursorrules|Dockerfile|Makefile)$/.test(path)) return path.endsWith('.cursorrules') ? 'md' : 'sh';
+  if (/(^|\/)\.cursorrules$/.test(path)) return 'md';
   const head = data.subarray(0, 64).toString();
   if (head.startsWith('#!')) return /python/.test(head) ? 'py' : /node/.test(head) ? 'js' : 'sh';
   return 'other';
 }
+
+// Never run at install: tests, docs, CI, examples. Browser bundles don't run in Node either.
+const AUX = /(^|\/)(tests?|testing|__tests__|spec|examples?|docs?|ci|\.circleci|\.github|benchmarks?|fixtures)\//;
+const BROWSER = /(^|\/)(static|public|assets|frontend|templates)\/.*\.[cm]?js$|\.min\.[cm]?js$/;
 
 const isBinary = d => d.subarray(0, 8000).includes(0);
 
@@ -74,8 +78,8 @@ function pypiRoles(files) {
   const findings = [];
   for (const f of files) {
     if (f.path === 'setup.py') roles.set(f.path, 'install');
-    else if (/^[^/]+\/__init__\.py$/.test(f.path) || /^(src\/)?[^/]+\/__init__\.py$/.test(f.path)) roles.set(f.path, 'entry');
-    else if (f.path.endsWith('.pth')) {
+    else if (/^(src\/)?[^/]+\/__init__\.py$/.test(f.path) && !AUX.test(f.path)) roles.set(f.path, 'entry');
+    else if (f.path.endsWith('.pth') && !AUX.test(f.path)) {
       const text = f.data.toString('utf8');
       if (/^\s*import\s/m.test(text)) {
         roles.set(f.path, 'entry');
@@ -148,7 +152,7 @@ export function analyze(pkg) {
         ...f,
         kind: binary ? 'binary' : kindOf(f.path, f.data),
         text: binary ? null : f.data.toString('utf8'),
-        role: pkg.ecosystem === 'script' ? 'install' : roles.get(f.path) ?? (/(^|\/)(tests?|testing|__tests__|spec|examples?|docs?|ci|\.circleci|\.github|benchmarks?|fixtures)\//.test(f.path) ? 'aux' : 'runtime'),
+        role: pkg.ecosystem === 'script' ? 'install' : roles.get(f.path) ?? (AUX.test(f.path) || BROWSER.test(f.path) || (pkg.ecosystem === 'pypi' && /\.[cm]?js$/.test(f.path)) ? 'aux' : 'runtime'),
       };
     }),
     ...virtual.map(v => ({ ...v, text: v.data.toString('utf8') })),

