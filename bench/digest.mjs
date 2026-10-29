@@ -19,7 +19,9 @@ function walk(dir, out = []) {
 const byGroup = {};
 for (const r of results.filter(r => r.verdict === 'SAFE')) (byGroup[r.group] ??= []).push(r);
 for (const [group, list] of Object.entries(byGroup)) {
-  for (const r of list.slice(0, Number(per))) {
+  // Spread the picks across the list so one package with many versions doesn't fill the digest.
+  const step = Math.max(1, Math.floor(list.length / Number(per)));
+  for (const r of list.filter((_, i) => i % step === 0).slice(0, Number(per))) {
     const dir = join(root, group, r.sample);
     const files = walk(dir);
     console.log(`\n===== ${group}/${r.sample} (${files.length} files)`);
