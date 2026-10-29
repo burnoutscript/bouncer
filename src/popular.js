@@ -53,6 +53,8 @@ const norm = s => s.toLowerCase().replace(/^@[^/]+\//, '').replace(/[-_.]+/g, ''
 export function lookalike(name, ecosystem) {
   const list = POPULAR[ecosystem] || [];
   if (list.includes(name)) return null;
+  // A scoped name (@img/colour) can't be mistaken for an unscoped one (color) at install time.
+  if (name.startsWith('@')) return null;
   const n = norm(name);
   if (n.length < 4) return null;
   for (const p of list) {

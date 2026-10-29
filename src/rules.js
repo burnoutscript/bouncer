@@ -331,7 +331,19 @@ export const FILE_RULES = [
         break;
       }
     }
-    const comment = f.kind === 'md' ? first(f.text, /<!--[\s\S]{0,400}?\b(you must|always|never|assistant|AI|agent|model|instructions?)\b[\s\S]{0,400}?-->/i) : null;
+    // A real hidden instruction addresses the model and tells it to do something.
+    // Markers like <!-- BEGIN:nextjs-agent-rules --> (added by create-next-app) don't.
+    let comment = null;
+    if (f.kind === 'md') {
+      for (const m of f.text.matchAll(/<!--([\s\S]{0,800}?)-->/g)) {
+        const body = m[1];
+        if (body.trim().split(/\s+/).length < 6) continue;
+        if (/\b(you must|you should|always|never|do not|don't|ignore|before (you|responding|answering|summariz\w*)|make sure (you|to))\b/i.test(body) && /\b(assistant|AI|agent|model|claude|LLM|you)\b/i.test(body)) {
+          comment = { index: m.index, match: m[0] };
+          break;
+        }
+      }
+    }
     if (comment && agentFile) out.push(mk(f, 'hidden-instructions', 'high', 'Instructions hidden in an HTML comment', 'Invisible when rendered, fully visible to the agent.', comment));
     return out;
   },

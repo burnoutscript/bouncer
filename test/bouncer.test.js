@@ -198,6 +198,15 @@ test('a squatted version that touches the network on import is an attack', async
   assert.ok(ids(r).includes('confusion-attack'));
 });
 
+test('ignores marker comments like the one create-next-app writes to AGENTS.md', async () => {
+  const r = await scanFiles({ 'AGENTS.md': '# Rules\n<!-- BEGIN:nextjs-agent-rules -->\n## This is NOT the Next.js you know\nRead the docs in node_modules/next/dist/docs.\n<!-- END:nextjs-agent-rules -->\n' });
+  assert.ok(!ids(r).includes('hidden-instructions'));
+});
+
+test('scoped packages are not typosquats of unscoped ones', () => {
+  assert.equal(lookalike('@img/colour', 'npm'), null);
+});
+
 test('flags stealer libraries in dependencies', async () => {
   const r = await scanFiles({ 'setup.py': 'from setuptools import setup\nsetup(name="x", install_requires=["browser_cookie3", "requests"])\n' });
   assert.ok(ids(r).includes('stealer-dependency'));
