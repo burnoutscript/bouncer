@@ -28,6 +28,12 @@ function kindOf(path, data) {
 const AUX = /(^|\/)(tests?|testing|__tests__|spec|examples?|docs?|ci|\.circleci|\.github|benchmarks?|fixtures)\//;
 const BROWSER = /(^|\/)(static|public|assets|frontend|templates)\/.*\.[cm]?js$|\.min\.[cm]?js$/;
 
+// Rules run on the first 2 MB and last 1 MB of huge files: payloads sit at the
+// edges of bundles, and full scans of 8 MB minified files cost too much.
+const HEAD = 2 * 1024 * 1024;
+const TAIL = 1024 * 1024;
+const textOf = d => (d.length <= HEAD + TAIL ? d.toString('utf8') : `${d.subarray(0, HEAD).toString('utf8')}\n${d.subarray(d.length - TAIL).toString('utf8')}`);
+
 const isBinary = d => d.subarray(0, 8000).includes(0);
 
 function npmRoles(files) {
@@ -142,7 +148,7 @@ export function analyze(pkg) {
   }
 
   // An MCP server depends on an MCP SDK; mentioning one in a string doesn't count.
-  const MCP_SIGNS = /"@modelcontextprotocol\/sdk"\s*:|"fastmcp"\s*:|^\s*(from mcp(\.server)?(\.fastmcp)? import|import mcp\b)|from fastmcp\s+import|new McpServer\(|FastMCP\(/m;
+  const MCP_SIGNS = /"@modelcontextprotocol\/sdk"\s*:|"fastmcp"\s*:|^[ \t]*(from mcp(\.server)?(\.fastmcp)? import|import mcp\b)|from fastmcp\s+import|new McpServer\(|FastMCP\(/m;
   const isMcp = pkg.files.some(f => /\.(json|[cm]?js|ts|py)$/.test(f.path) && MCP_SIGNS.test(f.data.subarray(0, 200000).toString('utf8')));
 
   const prepared = [
@@ -151,7 +157,7 @@ export function analyze(pkg) {
       return {
         ...f,
         kind: binary ? 'binary' : kindOf(f.path, f.data),
-        text: binary ? null : f.data.toString('utf8'),
+        text: binary ? null : textOf(f.data),
         role: pkg.ecosystem === 'script' ? 'install' : roles.get(f.path) ?? (AUX.test(f.path) || BROWSER.test(f.path) || (pkg.ecosystem === 'pypi' && /\.[cm]?js$/.test(f.path)) ? 'aux' : 'runtime'),
       };
     }),

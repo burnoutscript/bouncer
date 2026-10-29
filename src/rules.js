@@ -39,9 +39,10 @@ const PERSISTENCE = [
 const EXFIL = [
   ['Discord webhook', /discord(app)?\.com\/api\/webhooks\//i],
   ['Telegram bot API', /api\.telegram\.org\/bot/i],
-  ['request-capture service', /\b(webhook\.site|[a-z0-9]+\.m\.pipedream\.net|requestbin\.(com|net|io)|hookbin\.com|[a-z0-9-]+\.free\.beeceptor\.com|requestcatcher\.com)\b/i],
-  ['tunnel', /[a-z0-9-]+\.(ngrok(-free)?\.(io|app|dev)|trycloudflare\.com|loca\.lt|serveo\.net)/i],
-  ['OAST callback', /\b[a-z0-9]{6,}\.(oast\.(pro|live|site|online|fun|me)|interact\.sh|burpcollaborator\.net)\b|canarytokens\.com\//i],
+  // Host labels are anchored with a lookbehind so a long alphanumeric run is O(n), not O(n^2).
+  ['request-capture service', /\b(webhook\.site|requestbin\.(com|net|io)|hookbin\.com|requestcatcher\.com)\b|(?<![a-z0-9-])[a-z0-9-]{1,63}\.(m\.pipedream\.net|free\.beeceptor\.com)\b/i],
+  ['tunnel', /(?<![a-z0-9-])[a-z0-9-]{1,63}\.(ngrok(-free)?\.(io|app|dev)|trycloudflare\.com|loca\.lt|serveo\.net)/i],
+  ['OAST callback', /(?<![a-z0-9-])[a-z0-9]{6,63}\.(oast\.(pro|live|site|online|fun|me)|interact\.sh|burpcollaborator\.net)\b|canarytokens\.com\//i],
   ['paste or file drop', /pastebin\.com\/raw|transfer\.sh|file\.io\/|0x0\.st|bashupload\.com|temp\.sh/i],
   ['raw IP address', /https?:\/\/(?!(?:127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.))(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\//],
 ];
@@ -50,16 +51,16 @@ const NETWORK = /\b(fetch\(|https?\.(request|get)\(|require\(['"](https?|net|dgr
 const EXEC = /(\bchild_process\b|\bexecSync\(|\bspawnSync\(|\bexecFile(Sync)?\(|\bsubprocess\.(run|call|Popen|check_output|check_call)\(|\bos\.(system|popen)\(|\bRuntime\.getRuntime|\bpowershell(\.exe)?\s+-|\bcmd(\.exe)?\s+\/c)/;
 // Serialising the whole environment is the strong signal. Iterating it is
 // normal (copying env into a child process), except in install code.
-const ENV_HARVEST = /JSON\.stringify\(\s*process\.env\s*\)|json\.dumps\(\s*(dict\()?os\.environ|str\(\s*os\.environ\s*\)|\benv\s*\|\s*(curl|nc|base64)|printenv\s*\|\s*(curl|nc|base64)|Get-ChildItem\s+env:[^\n]*\|\s*(ConvertTo-Json|Out-String)/i;
+const ENV_HARVEST = /JSON\.stringify\(\s*process\.env\s*\)|json\.dumps\(\s*(dict\()?os\.environ|str\(\s*os\.environ\s*\)|\benv\s*\|\s*(curl|nc|base64)|printenv\s*\|\s*(curl|nc|base64)|Get-ChildItem\s+env:[^\n]{0,200}\|\s*(ConvertTo-Json|Out-String)/i;
 const ENV_ITER = /Object\.(entries|keys|values)\(\s*process\.env\s*\)|dict\(\s*os\.environ\s*\)|os\.environ\.(copy|items)\(\)/;
 const TOKEN_VARS = /\b(NPM_TOKEN|NODE_AUTH_TOKEN|GITHUB_TOKEN|GH_TOKEN|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY|PYPI_TOKEN|TWINE_PASSWORD|SLACK_TOKEN|STRIPE_SECRET_KEY|DATABASE_URL)\b/;
 
 const REMOTE_EXEC = [
-  /\b(curl|wget)\b[^\n|;]*\|\s*(sudo\s+)?(ba|z|da)?sh\b/,
-  /\b(curl|wget)\b[^\n|;]*\|\s*(python3?|node|perl|ruby)\b/,
-  /\b(iwr|irm|Invoke-WebRequest|Invoke-RestMethod|DownloadString)\b[^\n]*\|\s*(iex|Invoke-Expression)\b/i,
+  /\b(curl|wget)\b[^\n|;]{0,400}\|\s*(sudo\s+)?(ba|z|da)?sh\b/,
+  /\b(curl|wget)\b[^\n|;]{0,400}\|\s*(python3?|node|perl|ruby)\b/,
+  /\b(iwr|irm|Invoke-WebRequest|Invoke-RestMethod|DownloadString)\b[^\n]{0,400}\|\s*(iex|Invoke-Expression)\b/i,
   /\bIEX\s*\(\s*(New-Object\s+Net\.WebClient|\(New-Object)/i,
-  /powershell(\.exe)?[^\n]*\s-(e|enc|encodedcommand)\s+[A-Za-z0-9+/=]{20,}/i,
+  /powershell(\.exe)?[^\n]{0,200}\s-(e|enc|encodedcommand)\s+[A-Za-z0-9+/=]{20,}/i,
   /\bexec\(\s*(requests\.get|urllib\.request\.urlopen|urlopen)\(/,
   /\beval\(\s*(await\s+)?\(?\s*(await\s+)?fetch\(/,
   /new Function\([^)]*\b(responseText|body|data)\b/,
@@ -94,7 +95,7 @@ export function toolDescriptions(text) {
   const patterns = [
     /\bdescription\s*[:=]\s*(?:`([^`]{10,4000})`|"((?:[^"\\\n]|\\.){10,4000})"|'((?:[^'\\\n]|\\.){10,4000})')/g,
     /\.describe\(\s*(?:`([^`]{10,2000})`|"((?:[^"\\]|\\.){10,2000})"|'((?:[^'\\]|\\.){10,2000})')/g,
-    /@\w*\.?tool\b[^\n]*\n(?:\s*@[^\n]*\n)*\s*(?:async\s+)?def [^\n]+\n\s*(?:"{3}|'{3})([\s\S]{10,4000}?)(?:"{3}|'{3})/g,
+    /@\w*\.?tool\b[^\n]{0,200}\n(?:[ \t]*@[^\n]{0,200}\n){0,5}[ \t]*(?:async[ \t]+)?def [^\n]{1,300}\n[ \t]*(?:"{3}|'{3})([\s\S]{10,4000}?)(?:"{3}|'{3})/g,
   ];
   for (const re of patterns) {
     for (const m of text.matchAll(re)) {
@@ -273,7 +274,15 @@ export function binaryRule(files) {
 
 // Combinations matter more than single signals: reading secrets is normal for
 // an AWS SDK, reading secrets and sending them out from a postinstall is not.
-const indexes = (text, re) => [...text.matchAll(new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`))].map(m => m.index);
+// Capped: a minified bundle can hold thousands of matches, and pairing them is quadratic.
+const indexes = (text, re, cap = 400) => {
+  const out = [];
+  for (const m of text.matchAll(new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`))) {
+    out.push(m.index);
+    if (out.length >= cap) break;
+  }
+  return out;
+};
 const NEAR = 1500;
 
 export function chainRules(f, findings) {
