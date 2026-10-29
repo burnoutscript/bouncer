@@ -151,6 +151,19 @@ async function fetchUrl({ url }) {
   return { ecosystem: 'script', name: url, version: null, files: [{ path: name, data: Buffer.from(text) }], skipped: [], meta: {} };
 }
 
+async function readLocalArchive(path) {
+  const { files, skipped } = await readArchive(readFileSync(path), path);
+  const inner = stripRoot(files);
+  const pkgJson = inner.find(f => f.path === 'package.json');
+  let name = basename(path).replace(/\.(tgz|tar\.gz|whl|zip)$/i, '');
+  let ecosystem = /\.whl$/i.test(path) || inner.some(f => f.path === 'setup.py' || f.path === 'pyproject.toml' || f.path.endsWith('.dist-info/METADATA')) ? 'pypi' : 'local';
+  if (pkgJson) {
+    ecosystem = 'npm';
+    try { name = JSON.parse(pkgJson.data.toString()).name || name; } catch { /* keep file name */ }
+  }
+  return { ecosystem, name, version: null, local: true, files: /\.whl$/i.test(path) ? files : inner, skipped, meta: {} };
+}
+
 function readLocal({ path }) {
   const files = [];
   const skipped = [];
@@ -188,5 +201,6 @@ export async function fetchTarget(input) {
   if (t.type === 'npm') return fetchNpm(t);
   if (t.type === 'pypi') return fetchPypi(t);
   if (t.type === 'url') return fetchUrl(t);
+  if (/\.(tgz|tar\.gz|whl|zip)$/i.test(t.path) && statSync(t.path).isFile()) return readLocalArchive(t.path);
   return readLocal(t);
 }

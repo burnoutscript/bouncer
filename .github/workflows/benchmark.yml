@@ -1,0 +1,61 @@
+name: Malware benchmark
+
+# Scans a random sample of real malicious packages from DataDog's public
+# dataset. Static analysis only: samples are unpacked on a throwaway runner
+# and never executed.
+on:
+  workflow_dispatch:
+    inputs:
+      per_ecosystem:
+        description: Samples per ecosystem
+        default: '300'
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fetch a random sample of the dataset
+        env:
+          N: ${{ inputs.per_ecosystem }}
+        run: |
+          git clone -q --depth 1 --filter=blob:none --no-checkout https://github.com/DataDog/malicious-software-packages-dataset.git ds
+          cd ds
+          git ls-tree -r --name-only HEAD samples > ../all.txt
+          for eco in npm pypi; do
+            grep "^samples/$eco/malicious_intent/.*\.zip$" ../all.txt | shuf -n "$N" --random-source=<(yes) >> ../pick.txt
+          done
+          grep "^samples/ai-skills/.*\.zip$" ../all.txt >> ../pick.txt || true
+          wc -l ../pick.txt
+          git sparse-checkout init --no-cone
+          git sparse-checkout set --stdin < ../pick.txt
+          git checkout -q HEAD
+      - name: Unpack samples (password per dataset README)
+        run: |
+          mkdir -p samples
+          while read -r z; do
+            eco=$(echo "$z" | cut -d/ -f2)
+            name=$(echo "$z" | cut -d/ -f4)
+            dest="samples/$eco/$name-$(basename "$z" .zip)"
+            mkdir -p "$dest"
+            unzip -qq -o -P infected "ds/$z" -d "$dest" 2>/dev/null || echo "skip $z"
+          done < pick.txt
+          find samples -maxdepth 2 -mindepth 2 -type d | cut -d/ -f2 | sort | uniq -c
+      - name: Scan
+        run: node bench/malware.mjs samples results.json | tee summary.json
+      - name: Summary
+        run: |
+          echo '## Detection on real malware (DataDog dataset)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat summary.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: results.json
