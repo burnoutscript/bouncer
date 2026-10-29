@@ -137,7 +137,7 @@ function cmdSetup(o) {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
   out(`✅ bouncer is guarding Claude Code installs (${file})\n`);
-  if (/[\\/]_npx[\\/]/.test(BIN)) err('⚠️  You ran setup through npx, so the hook points at a temporary copy. Install it for good with: npm i -g agent-bouncer && bouncer setup\n');
+  if (/[\\/]_npx[\\/]/.test(BIN)) err('⚠️  You ran setup through npx, so the hook points at a temporary copy. Install it for good with: npm i -g github:burnoutscript/bouncer && bouncer setup\n');
   return 0;
 }
 
