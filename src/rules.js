@@ -196,6 +196,42 @@ export const FILE_RULES = [
     return out;
   },
 
+  // Commands hidden in base64: decode every blob and look at what's inside.
+  function hiddenPayload(f) {
+    if (!f.text || !(CODE.has(f.kind) || AGENT_DOC.test(f.path) || f.role === 'install')) return [];
+    const out = [];
+    const pipe = first(f.text, /\bbase64\s+(-d|--decode|-D)\b[^\n|]{0,60}\|\s*(sudo\s+)?(ba|z|da)?sh\b|\bbase64\s+(-d|--decode|-D)\b[^\n|]{0,60}\|\s*(python3?|perl|node)\b/);
+    if (pipe) out.push(mk(f, 'remote-code', 'critical', 'Decodes a hidden command and pipes it into a shell', 'You can\'t read what runs, which is the point.', pipe));
+    let checked = 0;
+    for (const m of f.text.matchAll(/(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{40,4000}={0,2}(?![A-Za-z0-9+/=])/g)) {
+      if (++checked > 200) break;
+      // Inline source maps and data: URIs are base64 by design.
+      if (/(base64,|sourceMappingURL=)\s*$/.test(f.text.slice(Math.max(0, m.index - 40), m.index))) continue;
+      const decoded = Buffer.from(m[0], 'base64').toString('latin1');
+      if (!/^[\x09\x0a\x0d\x20-\x7e]{30,}$/.test(decoded)) continue;
+      if (/\b(curl|wget)\s+-|\b(ba)?sh\s+-c\s|\bpowershell\b|\bInvoke-Expression\b|\biex\b|\bnc\s+-e\b|https?:\/\/(?:\d{1,3}\.){3}\d{1,3}|\/dev\/tcp\//i.test(decoded)) {
+        out.push(mk(f, 'hidden-command', 'critical', 'Base64 text that decodes to a command or IP address', `Decodes to: ${decoded.replace(/\s+/g, ' ').slice(0, 120)}`, { index: m.index, match: m[0] }));
+        break;
+      }
+    }
+    return out;
+  },
+
+  // Social engineering in skills: "download this zip, extract with password X, run it".
+  function lure(f) {
+    if (!f.text || !AGENT_DOC.test(f.path)) return [];
+    const out = [];
+    const pass = first(f.text, /\b(extract|unzip|unpack|open)\b[^\n]{0,60}\b(pass(word)?|pwd)\b[\s:=`'"]{1,4}[^\s`'"]{2,40}/i);
+    const download = first(f.text, /https?:\/\/[^\s)"'`]+\.(zip|rar|7z|exe|msi|dmg|pkg|scr|bat)\b/i);
+    if (pass && download) out.push(mk(f, 'malware-lure', 'critical', 'Tells you to download and unpack a password-protected archive', 'Passwords on downloads exist to hide malware from antivirus scanners.', pass));
+    else if (download && /\b(run|execute|launch|double-click|install)\b/i.test(f.text.slice(Math.max(0, download.index - 300), download.index + 300))) {
+      out.push(mk(f, 'download-run', 'high', 'Tells the user or agent to download and run a binary', 'Skills should not ship executables through download links.', download));
+    }
+    const hijack = first(f.text, /\b(must|always|should)\s+be\s+(automatically\s+)?(invoked|triggered|used|loaded|run|activated)\b[^.\n]{0,60}\b(every|all|each|any)\b[^.\n]{0,25}\b(request|message|prompt|task|conversation|turn)s?\b/i);
+    if (hijack) out.push(mk(f, 'skill-hijack', 'medium', 'Demands to run on every request', 'A skill that inserts itself into every conversation can steer everything the agent does.', hijack));
+    return out;
+  },
+
   function backdoor(f) {
     if (!CODE.has(f.kind)) return [];
     const hit = first(f.text, REVERSE_SHELL);
