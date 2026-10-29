@@ -1,4 +1,4 @@
-import { FILE_RULES, chainRules, binaryRule, SEVERITY } from './rules.js';
+import { FILE_RULES, chainRules, binaryRule, SEVERITY, NETWORK, CODE as CODE_KINDS } from './rules.js';
 import { lookalike } from './popular.js';
 
 const KINDS = {
@@ -247,7 +247,9 @@ export function analyze(pkg) {
   }
   findings.push(...binaryRule(prepared));
   // A squatted version number plus code that phones home is the whole attack, not two hints.
-  const phonesHome = findings.find(f => (f.id === 'recon-beacon' || f.id === 'install-exec-net' || f.id === 'dns-exfil') && f.severity !== 'low');
+  const hotNet = prepared.find(f => (f.role === 'install' || f.role === 'entry') && f.text && CODE_KINDS.has(f.kind) && NETWORK.test(f.text));
+  const phonesHome = findings.find(f => (f.id === 'recon-beacon' || f.id === 'install-exec-net' || f.id === 'dns-exfil' || (f.id === 'install-script' && f.severity !== 'low')) && f.severity !== 'low')
+    ?? (hotNet && { file: hotNet.path, line: null, snippet: null });
   if (phonesHome && findings.some(f => f.id === 'confusion-version')) {
     findings.push({ id: 'confusion-attack', severity: 'critical', title: 'Dependency-confusion attack: squatted version that phones home', why: 'A huge version number to hijack an internal package name, plus code that reports back who installed it.', file: phonesHome.file, line: phonesHome.line, snippet: phonesHome.snippet });
   }

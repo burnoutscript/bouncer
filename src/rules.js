@@ -42,7 +42,7 @@ const EXFIL = [
   // Host labels are anchored with a lookbehind so a long alphanumeric run is O(n), not O(n^2).
   ['request-capture service', /\b(webhook\.site|requestbin\.(com|net|io)|hookbin\.com|requestcatcher\.com)\b|(?<![a-z0-9-])[a-z0-9-]{1,63}\.(m\.pipedream\.net|free\.beeceptor\.com)\b/i],
   ['tunnel', /(?<![a-z0-9-])[a-z0-9-]{1,63}\.(ngrok(-free)?\.(io|app|dev)|trycloudflare\.com|loca\.lt|serveo\.net)/i],
-  ['OAST callback', /(?<![a-z0-9-])[a-z0-9]{6,63}\.(oast\.(pro|live|site|online|fun|me)|interact\.sh|burpcollaborator\.net)\b|canarytokens\.com\/|https?:\/\/[a-z0-9.-]{0,80}\boast(-[a-z]{2,4})?\.[a-z0-9-]{2,63}\.[a-z]{2,}/i],
+  ['OAST callback', /(?<![a-z0-9-])[a-z0-9]{6,63}\.(oast\.(pro|live|site|online|fun|me)|interact\.sh|burpcollaborator\.net|oastify\.com)\b|canarytokens\.com\/|https?:\/\/[a-z0-9.-]{0,80}\boast(-[a-z]{2,4})?\.[a-z0-9-]{2,63}\.[a-z]{2,}/i],
   ['paste or file drop', /pastebin\.com\/raw|transfer\.sh|file\.io\/|0x0\.st|bashupload\.com|temp\.sh/i],
   ['raw IP address', /https?:\/\/(?!(?:127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.))(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\//],
 ];
@@ -54,7 +54,7 @@ const EXEC = /(\bchild_process\b|\bos\.startfile\(|\bexecSync\(|\bspawnSync\(|\b
 const ENV_HARVEST = /JSON\.stringify\(\s*process\.env\s*\)|json\.dumps\(\s*(dict\()?os\.environ|str\(\s*os\.environ\s*\)|\benv\s*\|\s*(curl|nc|base64)|printenv\s*\|\s*(curl|nc|base64)|Get-ChildItem\s+env:[^\n]{0,200}\|\s*(ConvertTo-Json|Out-String)/i;
 const ENV_ITER = /Object\.(entries|keys|values)\(\s*process\.env\s*\)|dict\(\s*os\.environ\s*\)|os\.environ\.(copy|items)\(\)/;
 // Who and where the victim is: the payload of dependency-confusion "beacons".
-const IDENTITY = /\bos\.(hostname|userInfo|networkInterfaces)\(\)|\bsocket\.gethostname\(\)|\bplatform\.(node|uname)\(\)|\bgetpass\.getuser\(\)|\bos\.getlogin\(\)|\bos\.uname\(\)|\$\((whoami|hostname|id|pwd)\)|`(whoami|hostname)`|api\.ipify\.org|ifconfig\.me|ipinfo\.io\/|icanhazip\.com/;
+const IDENTITY = /\b\w{1,12}\.(hostname|userInfo|networkInterfaces)\(\)(\.username)?|\bsocket\.gethostname\(\)|\bplatform\.(node|uname)\(\)|\bgetpass\.getuser\(\)|\bos\.getlogin\(\)|\bos\.uname\(\)|\$\((whoami|hostname|id|pwd)\)|`(whoami|hostname)`|api\.ipify\.org|ifconfig\.me|ipinfo\.io\/|icanhazip\.com/;
 const DNS_EXFIL = /(^|[;&|(`'"]\s*)(nslookup|dig)\s[^\n]{0,80}(\$\((whoami|hostname|id|pwd|uname)|`(whoami|hostname)`|\$\{?(USER|HOSTNAME|LOGNAME)\b)|\bdns\.(lookup|resolve\w*)\(\s*`[^`]{0,200}\$\{[^}]{0,60}(hostname|userInfo|username|whoami)/m;
 const REVERSE_SHELL = /\/dev\/tcp\/\S+\/\d+|\bsocket\b[\s\S]{0,800}\[\s*["']\/bin\/(ba)?sh["']\s*,\s*["']-i["']|\bnc(at)?\s+(-\w+\s+)*-(e|c)\s+\/bin\/|\bpty\.spawn\(\s*["']\/bin\/(ba)?sh|\bos\.dup2\(\s*(s|sock|so|conn|client)\.fileno\(\)\s*,\s*[0-2]\s*\)|\bsocket\.socket\([^)]{0,80}\)[\s\S]{0,600}\b(subprocess\.\w+|os\.system|os\.popen)\([\s\S]{0,300}\brecv\(|\.recv\(\d+\)[\s\S]{0,300}\b(subprocess\.\w+|os\.system|os\.popen)\(|\bnet\.(connect|createConnection)\([\s\S]{0,400}\bspawn\(\s*["'](\/bin\/)?(ba)?sh/;
 const ESCAPE = /\\x[0-9a-fA-F]{2}|\\[0-7]{3}/g;
@@ -186,6 +186,11 @@ export const FILE_RULES = [
         }
       }
     }
+    const charReq = first(f.text, /\brequire\(\s*String\.fromCharCode\(|\b(import|__import__)\(\s*(String\.fromCharCode|chr\(|bytes\.fromhex|['"]\\x)/);
+    if (charReq) out.push(mk(f, 'obfuscated-exec', bump('high', f), 'Hides which module it loads', 'require(String.fromCharCode(111, 115)) is require("os") wearing a disguise.', charReq));
+    // javascript-obfuscator's string-array rotation loop.
+    const jso = first(f.text, /while\s*\(\s*!!\[\]\s*\)\s*\{\s*try\s*\{\s*(const|var|let)\s+_0x\w+\s*=\s*-?parseInt\(/);
+    if (jso && !/\.min\.[cm]?js$/.test(f.path)) out.push(mk(f, 'obfuscator', bump('medium', f), 'javascript-obfuscator output', 'The string-array rotation loop of javascript-obfuscator, a tool favoured by malware authors.', jso));
     const hexVars = f.text.match(/_0x[a-f0-9]{4,6}/g);
     if (hexVars && hexVars.length > 40 && !/\.min\.(js|mjs|cjs)$/.test(f.path)) {
       const hit = first(f.text, /_0x[a-f0-9]{4,6}/);

