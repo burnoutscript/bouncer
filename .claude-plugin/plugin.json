@@ -1,0 +1,10 @@
+{
+  "name": "bouncer",
+  "description": "Scans every package your agent tries to install (npm, PyPI, curl | sh, MCP servers) and blocks malware, typosquats, hallucinated packages and prompt injection before it runs.",
+  "version": "0.1.0",
+  "author": { "name": "Victor Candido" },
+  "homepage": "https://github.com/burnoutscript/bouncer",
+  "repository": "https://github.com/burnoutscript/bouncer",
+  "license": "MIT",
+  "keywords": ["security", "supply-chain", "npm", "pypi", "mcp", "hooks"]
+}

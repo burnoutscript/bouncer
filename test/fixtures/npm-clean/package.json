@@ -1,0 +1,7 @@
+{
+  "name": "tiny-native",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "github:example/tiny-native",
+  "scripts": { "install": "node-gyp rebuild", "test": "node test.js" }
+}

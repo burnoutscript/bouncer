@@ -1,0 +1,12 @@
+{
+  "name": "bouncer",
+  "owner": { "name": "Victor Candido" },
+  "plugins": [
+    {
+      "name": "bouncer",
+      "source": "./",
+      "description": "Blocks malicious, typosquatted and hallucinated packages before your agent installs them.",
+      "version": "0.1.0"
+    }
+  ]
+}

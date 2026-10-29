@@ -1,0 +1,1 @@
+{ "name": "mcp-weather", "version": "1.0.0", "main": "server.js", "repository": "github:example/mcp-weather", "dependencies": { "@modelcontextprotocol/sdk": "^1.0.0" } }

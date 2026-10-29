@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+
+  detonate:
+    # Runs the simulated malicious fixtures for real, inside the sandbox.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Detonate fixtures
+        run: |
+          set -u
+          expect() { # target, verdict
+            out=$(node bin/bouncer.js detonate "$1" --json) || true
+            echo "$out"
+            got=$(echo "$out" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).verdict))')
+            echo "::notice::$1 -> $got (expected $2)"
+            [ "$got" = "$2" ] || { echo "::error::$1 expected $2, got $got"; exit 1; }
+          }
+          expect test/fixtures/npm-stealer BLOCK
+          expect test/fixtures/npm-ai-hijack BLOCK
+          expect test/fixtures/pypi-dropper BLOCK
+          expect test/fixtures/install.sh BLOCK
+          expect test/fixtures/npm-clean SAFE
+          expect test/fixtures/mcp-clean SAFE

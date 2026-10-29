@@ -1,0 +1,1 @@
+{ "name": "prettier-plugin-x", "version": "0.0.9", "scripts": { "postinstall": "node hook.js" } }

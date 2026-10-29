@@ -1,0 +1,51 @@
+{
+  "name": "agent-bouncer",
+  "version": "0.1.0",
+  "description": "The bouncer for your AI agent's installs. Scans npm and PyPI packages, install scripts, MCP servers and agent skills for malware and prompt injection before they run, and detonates suspicious ones in a sandbox full of fake credentials.",
+  "type": "module",
+  "bin": {
+    "bouncer": "bin/bouncer.js"
+  },
+  "main": "src/index.js",
+  "exports": "./src/index.js",
+  "files": [
+    "bin",
+    "src",
+    "docker",
+    "hooks",
+    ".claude-plugin",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/bouncer.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "security",
+    "supply-chain",
+    "malware",
+    "npm",
+    "pypi",
+    "mcp",
+    "agent-skills",
+    "prompt-injection",
+    "claude-code",
+    "codex",
+    "cursor",
+    "ai-agents",
+    "sandbox"
+  ],
+  "author": "Victor Candido",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/burnoutscript/bouncer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/burnoutscript/bouncer/issues"
+  },
+  "homepage": "https://github.com/burnoutscript/bouncer#readme"
+}
