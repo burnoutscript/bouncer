@@ -105,7 +105,15 @@ A security tool that cries wolf gets uninstalled, so false positives are treated
 
 - **0 false positives on the 149 most-used packages** (99 npm, 50 PyPI), including `next`, `typescript`, `torch`, `numpy`, `prisma`, `esbuild`, `aws-sdk`, `@anthropic-ai/sdk` and `mcp`. They all come back SAFE.
 - **Every simulated attack in [`test/fixtures`](test/fixtures) is blocked**, both by the static scan and in the sandbox.
-- Detection on real malware from [DataDog's malicious packages dataset](https://github.com/DataDog/malicious-software-packages-dataset): see [Benchmark](#benchmark).
+- On real malware from [DataDog's malicious packages dataset](https://github.com/DataDog/malicious-software-packages-dataset), the static scan alone flags:
+
+  | Sample | Flagged (BLOCK or REVIEW) | Per unique package |
+  |---|---:|---:|
+  | 300 npm packages | 59% | 63% |
+  | 300 PyPI packages | 65% | 70% |
+  | 204 AI-agent skills | 32% | 32% |
+
+  That's the floor, not the ceiling. The benchmark scans samples offline, so it leaves out the registry signals bouncer uses in real installs (a package created yesterday, a version published two hours ago, a name that doesn't exist) and it leaves out detonation. Most of the misses are binary-only packages, which static analysis can't see into, and compromised versions of real libraries hiding a few lines in a minified bundle. Both are what `bouncer detonate` is for. See [Benchmark](#benchmark).
 
 ## Other agents and CI
 
@@ -157,7 +165,9 @@ npx agent-bouncer scan express@5.1.0 pypi:httpx==0.28.1 --fail-on review --markd
 
 ## Benchmark
 
-`node bench/malware.mjs` scans a random sample of real malicious npm and PyPI packages, and the AI-skills samples, from DataDog's dataset. It runs in [GitHub Actions](.github/workflows/benchmark.yml), never on a workstation.
+`node bench/malware.mjs` scans a random sample of real malicious npm and PyPI packages, and the AI-skills samples, from DataDog's dataset. It runs in [GitHub Actions](.github/workflows/benchmark.yml), never on a workstation: samples are unpacked on a throwaway runner and never executed, and every sample gets its own process with a 60-second limit. Run it yourself with **Actions → Malware benchmark → Run workflow**, and set `digest` to print a text summary of what was missed.
+
+Every rule change is also checked against the 149 most popular npm and PyPI packages, and a change that flags any of them doesn't ship. The rules are stress-tested against pathological inputs (multi-megabyte single lines, endless base64), so a crafted package can't stall the scanner.
 
 ## Contributing
 
