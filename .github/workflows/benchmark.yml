@@ -9,6 +9,9 @@ on:
       per_ecosystem:
         description: Samples per ecosystem
         default: '300'
+      digest:
+        description: Print a text digest of missed samples
+        default: 'false'
 
 permissions:
   contents: read
@@ -49,6 +52,9 @@ jobs:
           find samples -maxdepth 2 -mindepth 2 -type d | cut -d/ -f2 | sort | uniq -c
       - name: Scan
         run: node bench/malware.mjs samples results.json | tee summary.json
+      - name: Digest of misses (text only)
+        if: ${{ inputs.digest == 'true' }}
+        run: node bench/digest.mjs samples results.json 30
       - name: Summary
         run: |
           echo '## Detection on real malware (DataDog dataset)' >> "$GITHUB_STEP_SUMMARY"
